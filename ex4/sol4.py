@@ -196,14 +196,16 @@ def ransac_homography(pos1, pos2, num_iters, inlier_tol):
             continue
 
     points1, points2 = (pos1[max_inliers]), (pos2[max_inliers])
-    H12 = sol4_add.least_squares_homography(points1, points2)
+    H12 = sol4_add.least_squares_homography(points2, points1)
 
     if H12 is None: #todo remove
         print("H none")
-    transformed = apply_homography(pos1, H12)
-    error = np.linalg.norm((transformed - pos2), 2, axis=1)
-    final_inlier_indices = np.argwhere(error < inlier_tol)
-    return H12, final_inlier_indices.reshape(final_inlier_indices.size,)
+    # transformed = apply_homography(pos1, H12)
+    # error = np.linalg.norm((transformed - pos2), axis=1) ** 2
+    # final_inlier_indices = np.where(error < inlier_tol)[0]
+    # print("indice===========\n", final_inlier_indices.shape)
+    # print("ransac:\n\n", H12, final_inlier_indices.reshape(final_inlier_indices.size,))
+    return H12, max_inliers.reshape(max_inliers.size,)
 
 
 def ransac_homography_helper(pos1, pos2, inlier_tol):
@@ -227,8 +229,8 @@ def ransac_homography_helper(pos1, pos2, inlier_tol):
         raise ValueError
 
     transformed = apply_homography(pos1, H12)
-    error = np.linalg.norm((transformed - pos2),2, axis=1)
-    inlier_indices = np.argwhere(error < inlier_tol)
+    error = np.linalg.norm((transformed - pos2), axis=1) ** 2
+    inlier_indices = np.where(error < inlier_tol)[0]
     return inlier_indices.flatten()
 
 
@@ -288,33 +290,28 @@ def render_panorama(ims, Hs):
     #transformed points: [top left, top right, bottom left, bottom right, center],   shape (N, 5, 2)
     transformed_points = transform_corners_center(ims, Hs)
     num_images = len(ims)
-    # plt.figure()
-    # plt.scatter(transformed_points[:,:4,0], transformed_points[:,:4,1], marker="o")
-    # plt.show()
+    print("transformed points,\n ", transformed_points)
 
     #panorama boundaries
     ROW_AXIS, COL_AXIS = 0, 1
     TOP_LEFT, BOTTOM_LEFT, TOP_RIGHT, BOTTOM_RIGHT, CENTER = 0, 1, 2, 3, 4
-    x_min = np.min(transformed_points[0, TOP_LEFT:BOTTOM_LEFT+1, COL_AXIS])
-    x_max = np.max(transformed_points[num_images-1, TOP_RIGHT:BOTTOM_RIGHT+1, COL_AXIS])
-    y_min = np.min(transformed_points[:, :, ROW_AXIS])
-    y_max = np.max(transformed_points[:, :, ROW_AXIS])
+    x_min = np.floor(np.min(transformed_points[0, :, ROW_AXIS]))
+    x_max = np.floor(np.max(transformed_points[num_images-1, :, ROW_AXIS]))
+    y_min = np.floor(np.min(transformed_points[:, :, COL_AXIS]))
+    y_max = np.ceil(np.max(transformed_points[:, :, COL_AXIS]))
     p_width = np.abs(x_max - x_min)
     p_height = np.abs(y_max - y_min)
-    panorama = np.zeros(p_height * p_width)
-    panorama = panorama.reshape(p_height, p_width)
-    #
-    # plt.figure()
-    # plt.scatter([x_min, x_min, x_max, x_max], [y_min, y_max, y_min, y_max], marker="o")
-    # plt.show()
+    panorama = np.zeros(p_height * p_width).reshape(p_height, p_width)
 
     #vertical strips in panorama
     pan_x_bounds = np.zeros(num_images+1)
     pan_x_bounds[0] = x_min
     for j in np.arange(1, num_images):
-        pan_x_bounds[j] = np.floor((transformed_points[j-1, CENTER, COL_AXIS] + transformed_points[j, CENTER, COL_AXIS]) / 2)
+        mid = (transformed_points[j-1, CENTER, ROW_AXIS] + transformed_points[j, CENTER, ROW_AXIS]) / 2
+        pan_x_bounds[j] = transformed_points[j-1, CENTER, COL_AXIS] + mid.astype(np.int32)
     pan_x_bounds[num_images] = x_max
-    pan_x_bounds -= x_min
+    canvas_bounds = pan_x_bounds + np.abs(x_min)
+    print("panoram bounds: ", pan_x_bounds)
 
     #coordinates in panorama system
     x_range = np.linspace(x_min, x_max, p_width).astype(np.int32)
@@ -323,18 +320,26 @@ def render_panorama(ims, Hs):
 
     #backwarping
     for k in np.arange(num_images):
-        curr_x_min = pan_x_bounds[k]
-        curr_x_max = pan_x_bounds[k+1]
-        curr_x_range = x[:, curr_x_min:curr_x_max+1].flatten()
-        curr_y_range = y[:, curr_x_min:curr_x_max+1].flatten()
+        curr_x_min = np.floor(canvas_bounds[k])
+        curr_x_max = np.ceil(canvas_bounds[k+1])
+        # print("keren bounds",curr_x_min,curr_x_max+1)
+        curr_x_range = (x[:, curr_x_min:curr_x_max+1].flatten())
+        curr_y_range = (y[:, curr_x_min:curr_x_max+1].flatten())
 
-        pan_area = np.vstack((curr_x_range, curr_y_range)).reshape(curr_x_range.size, 2)         #shape (N,2)
+        pan_area = np.zeros(curr_x_range.size * 2).reshape(curr_x_range.size, 2)
+        pan_area[:, 0] = curr_x_range
+        pan_area[:, 1] = curr_y_range
         original_area = apply_homography(pan_area, Hs[k])
 
         to_interpolate = np.transpose(np.fliplr(original_area))
+        print("to interpolate", to_interpolate.shape)
         intensities = scipy.ndimage.map_coordinates(ims[k], to_interpolate, order=1, prefilter=False)
-        panorama[:, pan_x_bounds[k]:pan_x_bounds[k+1]+1] = intensities.reshape(p_height, curr_x_max-curr_x_min+1)
-        return panorama
+        if k == num_images - 1:
+            panorama[:, canvas_bounds[k]:] = intensities.reshape(p_height, intensities.shape / p_height)
+        else:
+            panorama[:, canvas_bounds[k]:canvas_bounds[k+1]+1] = intensities.reshape(p_height, curr_x_max-curr_x_min+1)
+
+    return panorama
 
 
 
@@ -345,7 +350,6 @@ def transform_corners_center(ims, Hs):
     :param Hs: list of M 3x3 homography matrices transforming points from coordinate system i to ponorama's coordinates
     :return: array of shape (N, 5, 2) with transformed [x,y] points
     """
-    Y_PLACE_HOLDER = 1
     num_images = len(ims)
     transformed = np.zeros(5 * 2 * num_images).reshape(num_images, 5, 2)
 
@@ -353,7 +357,7 @@ def transform_corners_center(ims, Hs):
         im = ims[i]
         #order: TOP LEFT, BOTTOME LEFT, TOP RIGHT, BOTTOM RIGHT, CENTER
         curr_corners = np.hstack(([0, 0], [im.shape[0]-1, 0], [0, im.shape[1]-1], [im.shape[0]-1, im.shape[1]-1]))
-        center = [np.floor(im.shape[1]/2), Y_PLACE_HOLDER]
+        center = [np.ceil(im.shape[0]/2), np.ceil(im.shape[1]/2)]
         curr_points = np.fliplr(np.hstack((curr_corners, center)).reshape(5,2))
         transformed[i] = apply_homography(curr_points, np.linalg.inv(Hs[i]))
 
@@ -389,8 +393,8 @@ def test_matching(desc1, desc2):
 
 
 def test_harris(img):
-    # features = sol4_add.spread_out_corners(img, SUB_IMG_HEIGHT, SUB_IMG_WIDTH, SPREAD_RADIUS)
-    features = sol4_eldan.harris_corner_detector(img)
+    features = sol4_add.spread_out_corners(img, SUB_IMG_HEIGHT, SUB_IMG_WIDTH, SPREAD_RADIUS)
+    # features = sol4.harris_corner_detector(img)
     x_coords = features[:,0]
     y_coords = features[:,1]
     plt.imshow(img, plt.cm.gray)
