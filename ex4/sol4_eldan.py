@@ -152,7 +152,7 @@ def ransac_homography(pos1,pos2, num_iter, inliner_tol):
         if h12 is None:
             continue
         p_1_to_2 = apply_homography(pos1[:,:], h12.astype(np.float32)).astype(np.float32)
-        error = np.linalg.norm(p_1_to_2[:,:] - pos2[:,:],axis=1)**2
+        error = np.linalg.norm(p_1_to_2[:,:] - pos2[:,:],axis=1)
         tamp = np.where(error < inliner_tol)
 
         final_inliners = tamp if np.size(tamp) > np.size(final_inliners) else final_inliners
@@ -246,24 +246,34 @@ def get_boundris(ims,Hs):
     for i in range(len(ims)-1):
             h_1, w_1 = ims[i].shape
             h_2, w_2 = ims[i+1].shape
-            center_im_1 = np.fliplr(np.array([[int(h_1//2),int(w_1//2)]]))
-            center_im_2 = np.fliplr(np.array([[int(h_2//2),int(w_2//2)]]))
+            center_im_1 = np.fliplr(np.array([[int(h_1//2), int(w_1//2)]]))
+            center_im_2 = np.fliplr(np.array([[int(h_2//2), int(w_2//2)]]))
+            print("original centers", center_im_1, center_im_2)
+            print("Eldan homograph for im:\n", i, Hs[i], Hs[i+1])
             new_center_1 = np.fliplr(apply_homography(center_im_1,np.linalg.inv(Hs[i])))
             new_center_2 = np.fliplr(apply_homography(center_im_2,np.linalg.inv(Hs[i+1])))
+            print("centers", new_center_1, new_center_2)
             centers.append(int((new_center_1[:,1] + new_center_2[:,1])//2))
+
     return centers
 
 
 
 def render_panorama(ims,Hs):
-    row_min, row_max, w_min, w_max ,cords = get_canves_size(ims, Hs)
+    row_min, row_max, w_min, w_max, cords = get_canves_size(ims, Hs)
+    print("eldan canvas size", w_min, w_max, row_min, row_max)
     totel_w = w_max - w_min
     totle_h = row_max - row_min
     image_bound = [w_min]
-    image_bound.extend(get_boundris(ims,Hs))
+    image_bound.extend(get_boundris(ims, Hs))
     image_bound.append(w_max)
-    ny = np.linspace(row_min,row_max,totle_h).astype(np.int32)
+    print("eldan bounds", image_bound)
+    ny = np.linspace(row_min, row_max, totle_h).astype(np.int32)
     nx = np.linspace(w_min, w_max, totel_w).astype(np.int32)
+    print("eldan linspace Y", np.min(ny), np.max(ny))
+    print("eldan linspace X", np.min(nx), np.max(nx))
+
+
     canves_x_ind, canves_y_ind = np.meshgrid(nx,ny)
     final_im = creat_canves(totle_h,totel_w)
     for i, im in enumerate(ims):
@@ -278,7 +288,7 @@ def render_panorama(ims,Hs):
         im_ind = creat_im_ind(canves_x_ind, canves_y_ind, [im_left_bound, im_size])
         print("sent to apply\n", im_ind.shape)
         warp_back_index = np.transpose(np.fliplr(apply_homography(im_ind, Hs[i])))
-        print("eldan to interpolate",warp_back_index.shape)
+        # print("eldan to interpolate",warp_back_index.shape)
         image_int = ter.map_coordinates(im, warp_back_index, order=1, prefilter=False)
 
 
@@ -287,6 +297,7 @@ def render_panorama(ims,Hs):
             final_im[:, im_left_bound:im_right_bound] = image_strip
         else:
             final_im = blending_images(final_im,image_strip,im_left_bound,im_right_bound,totle_h,totel_w,im_left_bound)
+    print(final_im.shape)
     return final_im
 
 def creat_im_ind(canve_cord_x, canve_cord_y, bounds):
