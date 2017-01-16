@@ -150,11 +150,20 @@ def pad_zeros(im):
     :param im: grayscale image with double values in [0,1]
     :return: padded im, same type as im
     """
-    indices_row = np.arange(im.shape[0])
-    indices_col = np.arange(im.shape[1])
-    row_padded = np.insert(im, indices_row, 0, axis=0)
-    return np.insert(row_padded, indices_col, 0, axis=1)
+    padded = np.insert(im, slice(1, None), 0, axis=1)
+    padded = np.insert(padded, slice(1, None), 0, axis=0)
 
+    if padded.shape[0] != im.shape[0]:
+        # indices_row = np.arange(padded.shape[1])
+        # padded = np.append(padded, indices_row, 0, axis=0)
+        indices_row = np.zeros((1, padded.shape[1])).astype(np.float32)
+        padded = np.append(padded, indices_row, axis=0)
+    if padded.shape[1] != im.shape[1]:
+        # indices_col = np.arange(padded.shape[0])
+        # padded = np.append(padded, indices_col, 0, axis=1)
+        indices_col = np.zeros((padded.shape[0], 1)).astype(np.float32)
+        padded = np.append(padded, indices_col, axis=1)
+    return padded
 
 def expand(im, kernel):
     """
@@ -162,7 +171,9 @@ def expand(im, kernel):
     :param im: grayscale image with double values in [0,1]
     :return: expanded im, same type as im
     """
+    print("before expand", im.shape)
     padded_im = pad_zeros(im)
+    print("after expand", im.shape)
     return blur_spatial_kernel(padded_im, kernel * EXPAND_FACTOR)
 
 
