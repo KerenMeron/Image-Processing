@@ -286,39 +286,35 @@ def render_panorama(ims, Hs):
     :param Hs: list of M 3x3 homography matrices transforming points from coordinate system i to ponorama's coordinates
     :return: panorama: grayscale image composed of vertical strips
     """
-    print("KEREN HS\n\n", Hs)
     #transformed points: [top left, top right, bottom left, bottom right, center],   shape (N, 5, 2)
     transformed_points = transform_corners_center(ims, Hs)
     num_images = len(ims)
-    print("transformed points,\n ", transformed_points)
 
     #panorama boundaries
     ROW_AXIS, COL_AXIS = 0, 1
-    TOP_LEFT, BOTTOM_LEFT, TOP_RIGHT, BOTTOM_RIGHT, CENTER = 0, 1, 2, 3, 4
+    TOP_LEFT, BOTTOM_LEFT, TOP_RIGHT, BOTTOM_RIGHT = 0, 1, 2, 3
     x_min = np.floor(np.min(transformed_points[0, :, COL_AXIS]))
     x_max = np.ceil(np.max(transformed_points[num_images-1, :, COL_AXIS]))
     y_min = np.floor(np.min(transformed_points[:, :, ROW_AXIS]))
     y_max = np.ceil(np.max(transformed_points[:, :, ROW_AXIS]))
-    print("Keren canvas corners", x_min, x_max, y_min, y_max)
     p_width = np.abs(x_max - x_min)
     p_height = np.abs(y_max - y_min)
     panorama = np.zeros((p_height, p_width))
 
+
     #vertical strips in panorama
-    pan_x_bounds = np.zeros(num_images+1)
-    pan_x_bounds[0] = x_min
-    print("xmin", x_min, y_min, x_max, y_max)
-    for j in np.arange(1, num_images):
-        print("center", transformed_points[j-1, CENTER, COL_AXIS])
-        mid = (transformed_points[j-1, CENTER, COL_AXIS] + transformed_points[j, CENTER, COL_AXIS]) / 2
-        print("mid",mid)
-        pan_x_bounds[j] = mid.astype(np.int32) + 1  #pan_x_bounds[j-1] + np.abs(mid).astype(np.int32)
-    pan_x_bounds[num_images] = x_max
+    # pan_x_bounds = np.zeros(num_images+1)
+    # pan_x_bounds[0] = x_min
+    # print("xmin", x_min, y_min, x_max, y_max)
+    # for j in np.arange(1, num_images):
+    #     print("center", transformed_points[j-1, CENTER, COL_AXIS])
+    #     mid = (transformed_points[j-1, CENTER, COL_AXIS] + transformed_points[j, CENTER, COL_AXIS]) / 2
+    #     print("mid",mid)
+    #     pan_x_bounds[j] = mid.astype(np.int32) + 1  #pan_x_bounds[j-1] + np.abs(mid).astype(np.int32)
+    # pan_x_bounds[num_images] = x_max
 
-    pan_x_bounds = sol4_eldan.get_boundris(ims, Hs, x_min, x_max)
-
+    pan_x_bounds = get_centers_helper(ims, Hs, x_min, x_max)
     canvas_bounds = pan_x_bounds + np.abs(x_min)
-    print("panoram bounds: ", pan_x_bounds)
 
     #coordinates in panorama system
     x_range = np.linspace(x_min, x_max, p_width).astype(np.int32)
@@ -330,7 +326,6 @@ def render_panorama(ims, Hs):
         curr_x_min = np.floor(canvas_bounds[k])
         curr_x_max = np.ceil(canvas_bounds[k+1])
         shift = np.abs(x_min)
-        print("keren bounds", curr_x_min, curr_x_max+1)
         curr_x_range = (x[:, curr_x_min : curr_x_max+1].flatten())
         curr_y_range = (y[:, curr_x_min : curr_x_max+1].flatten())
 
@@ -345,8 +340,7 @@ def render_panorama(ims, Hs):
         if k == num_images - 1:
             panorama[:, canvas_bounds[k]:] = intensities.reshape(p_height, intensities.size / p_height)
         else:
-            print("reshape to:", p_height, curr_x_max-curr_x_min)
-            print("reshape from:", intensities.shape)
+
             panorama[:, curr_x_min:curr_x_max+1] = intensities.reshape(p_height, intensities.size/
                                                                                      p_height)
 
@@ -362,31 +356,30 @@ def transform_corners_center(ims, Hs):
     :return: array of shape (N, 5, 2) with transformed [x,y] points
     """
     num_images = len(ims)
-    transformed = np.zeros(5 * 2 * num_images).reshape(num_images, 5, 2)
+    transformed = np.zeros(4 * 2 * num_images).reshape(num_images, 4, 2)
 
     for i in np.arange(num_images):
         im = ims[i]
         #order: TOP LEFT, BOTTOME LEFT, TOP RIGHT, BOTTOM RIGHT, CENTER
         curr_corners = np.hstack(([0, 0], [im.shape[0]-1, 0], [0, im.shape[1]-1], [im.shape[0]-1, im.shape[1]-1]))
-        center = [np.floor(im.shape[1]/2), np.floor(im.shape[0]/2)]
-        curr_points = np.fliplr(np.hstack((curr_corners, center)).reshape(5,2))
+        curr_points = np.fliplr(curr_corners.reshape(4, 2))
         transformed[i] = np.fliplr(apply_homography(curr_points, np.linalg.inv(Hs[i])))
-    print("Keren corners after", transformed[:,4,:])
-
     return np.floor(transformed)
 
-# def get_boundris(ims,Hs,w_min,w_max):
-#     centers = [w_min]
-#     for i in range(len(ims)-1):
-#             h_1, w_1 = ims[i].shape
-#             h_2, w_2 = ims[i+1].shape
-#             center_im_1 = np.fliplr(np.array([[int(h_1//2),int(w_1//2)]]))
-#             center_im_2 = np.fliplr(np.array([[int(h_2//2),int(w_2//2)]]))
-#             new_center_1 = np.fliplr(apply_homography(center_im_1,np.linalg.inv(Hs[i])))
-#             new_center_2 = np.fliplr(apply_homography(center_im_2,np.linalg.inv(Hs[i+1])))
-#             centers.append(int((new_center_1[:,1] + new_center_2[:,1])//2))
-#     centers.append(w_max)
-#     return centers
+
+def get_centers_helper(ims, Hs, x_min, x_max):
+    centers = [x_min]
+    for i in np.arange(len(ims)-1):
+            height1, width1 = ims[i].shape
+            height2, width2 = ims[i+1].shape
+            original_center1 = np.fliplr(np.array([[int(height1//2), int(width1//2)]]))
+            original_center2 = np.fliplr(np.array([[int(height2//2), int(width2//2)]]))
+            new_center_1 = np.fliplr(apply_homography(original_center1, np.linalg.inv(Hs[i])))
+            new_center_2 = np.fliplr(apply_homography(original_center2, np.linalg.inv(Hs[i+1])))
+            centers.append(int((new_center_1[: ,1] + new_center_2[: ,1])//2))
+    centers.append(x_max)
+    return centers
+
 
 def test():
     img1 = utils.read_image('external/office1.jpg', GRAY_SCALE)
