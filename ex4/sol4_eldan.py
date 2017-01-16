@@ -3,17 +3,8 @@
 # WRITER : Eldan chodorov , eldan , 201335965
 # EXERCISE : image Proc sol4 2016-2017
 #############################################################
-import numpy as np
-from scipy.misc import imread as imread
-from scipy import ndimage
 from scipy.ndimage import interpolation as ter
-from scipy.signal import convolve2d
-from skimage.color import rgb2gray
-import matplotlib.pyplot as plt
-from copy import *
-from functools import reduce
-import os
-from PIL import ImageFile
+
 
 import sol4_add as ad
 from sol4_utils import *
@@ -22,8 +13,11 @@ DRIV_KERNAL = np.array([[1], [0], [-1]]).astype(np.float32)
 Y_AXIS = 1
 X_AXIS = 2
 K_FACTOR = 0.04
+RESIZE_FACTOR = 4
 def harris_corner_detector(im):
     '''
+    The method is responsible for identifying locations in the image that have a unique Detection like
+    a corner of an object
     :param im: input image
     :return: a list of tupels Representing indexes Indicating corners in the Image
     '''
@@ -43,10 +37,12 @@ def harris_corner_detector(im):
 
 def deriv_in_axis(im, axis):
     '''
-
+    The method is responsible for creating a derivative of an image of a particular axis
+    returns the deriv image
     :param im:
-    :param axis:
-    :return:
+    :param axis: axis, whereby the method generates the derived image
+    Y_AXIS = 1
+    X_AXIS = 2
     '''
     drive_kern = DRIV_KERNAL if axis == X_AXIS else np.transpose(DRIV_KERNAL)
     return convolve2d(im, drive_kern, mode='same').astype(np.float32)
@@ -54,14 +50,12 @@ def deriv_in_axis(im, axis):
 
 def sample_descriptor(im, pos, desc_rad):
     '''
-
-    :param im:
-    :param pos:
-    :param desc_rad:
-    :return:
+    Produces a matrix descriptor, describes the point identified as interesting,
+    by sampling the strengths of her surroundings from the third stage of the
+    pyramid image return a descriptor matrix
+    :param desc_rad: the radius of the Matrix
     '''
     disc_size = 2 * desc_rad + 1
-    # resiz_po = np.array([[point[0]/4,point[1]/4] for point in pos])
     discriptor_met = np.zeros((disc_size,disc_size,len(pos)))
     for i,point in enumerate(pos):
         discriptor_corde = np.transpose(np.fliplr(creat_index_for_discriptor(point,desc_rad)))
@@ -74,10 +68,10 @@ def sample_descriptor(im, pos, desc_rad):
 
 def creat_index_for_discriptor(pos,desc_rad):
     '''
-
+    Creates a matrix of indexes surrounding the index Interest
     :param pos:
     :param desc_rad:
-    :return:
+    :return: a vector of two-dimensions, the index of X and Y
     '''
     nx = np.linspace(-desc_rad,desc_rad, 2 * desc_rad + 1)
     ny = np.linspace(-desc_rad, desc_rad, 2 * desc_rad + 1)
@@ -90,10 +84,16 @@ def creat_index_for_discriptor(pos,desc_rad):
 
 
 def find_features(pyr):
+    '''
+    Gtting pyramid image and identifies points of interest in the image
+    At the end returns a list of indexes and discriptor of the points of the  image
+    :param pyr:
+    :return:
+    '''
     pos = ad.spread_out_corners(pyr[0],7,7,12)
     # pos = harris_corner_detector(pyr[0])
-    resize_point = pos/4
-    desc = sample_descriptor(pyr[2], resize_point, 3)
+    resize_point = pos/RESIZE_FACTOR
+    desc = sample_descriptor(pyr[2], resize_point, 3).astype(np.float32)
     return pos, desc
 
 def match_features(desc1,desc2,min_score):
@@ -123,11 +123,11 @@ def apply_homography(pos1, H12):
     three_cord = np.ones((pos1.shape[0],pos1.shape[1]+1))
     three_cord[:,:-1] = pos1
     three_cord = three_cord.T
-    new_cords = np.dot(H12, three_cord).astype(np.float32)
+    new_cords = np.nan_to_num(np.dot(H12, three_cord).astype(np.float32))
     new_cords = new_cords / new_cords[2, :]
     final_mat = np.zeros((pos1.shape[1],pos1.shape[0]))
     final_mat[:,:]= new_cords[:-1,]
-    return final_mat.T
+    return np.nan_to_num(final_mat.T)
 
 def ransac_homography(pos1,pos2, num_iter, inliner_tol):
     '''
@@ -138,7 +138,6 @@ def ransac_homography(pos1,pos2, num_iter, inliner_tol):
     :param inliner_tol:
     :return:
     '''
-
     pos_4_1 = np.zeros((4,2))
     pos_4_2 = np.zeros((4,2))
     nx = np.arange(4).astype(np.int32)
@@ -146,20 +145,18 @@ def ransac_homography(pos1,pos2, num_iter, inliner_tol):
     final_inliners = np.array((0,0))
     while num_iter > 0:
         np.random.shuffle(indices_for_rensac)
-        pos_4_1[nx] = pos1[indices_for_rensac[:4]]
-        pos_4_2[nx] = pos2[indices_for_rensac[:4]]
+        pos_4_1[nx] = (pos1[indices_for_rensac[:4]])
+        pos_4_2[nx] = (pos2[indices_for_rensac[:4]])
         h12 = ad.least_squares_homography(pos_4_1, pos_4_2)
         if h12 is None:
             continue
         p_1_to_2 = apply_homography(pos1[:,:], h12.astype(np.float32)).astype(np.float32)
         error = np.linalg.norm(p_1_to_2[:,:] - pos2[:,:],axis=1)
         tamp = np.where(error < inliner_tol)
-
         final_inliners = tamp if np.size(tamp) > np.size(final_inliners) else final_inliners
         num_iter -= 1
     points1, points2 = pos1[final_inliners], pos2[final_inliners]
     final_h12 = ad.least_squares_homography(points2,points1)
-
     return final_h12, final_inliners
 
 
@@ -175,133 +172,103 @@ def display_matches(im1, im2, pos1, pos2, inliers):
     pos1_outliers = pos1[pos_outliers_idx]
     pos2_outliers = pos2[pos_outliers_idx]
     plt.figure()
-    # plt.imshow(double_im, plt.cm.gray)
-    #
-    # plt.plot((pos1_outliers[:,0],pos2_outliers[:,0]),(pos1_outliers[:,1],pos2_outliers[:,1]), mfc='r',
-    #          c='b', lw=0.5, marker='.')
-    # plt.plot((pos1_inliners[:,0],pos2_inliners[:,0]),(pos1_inliners[:,1],pos2_inliners[:,1]), mfc='r',
-    #          c='y', lw=0.5, marker='.')
-    # plt.show()
+    plt.imshow(double_im, plt.cm.gray)
+
+    plt.plot((pos1_outliers[:,0],pos2_outliers[:,0]),(pos1_outliers[:,1],pos2_outliers[:,1]), mfc='r',
+             c='b', lw=0.5, marker='.')
+    plt.plot((pos1_inliners[:,0],pos2_inliners[:,0]),(pos1_inliners[:,1],pos2_inliners[:,1]), mfc='r',
+             c='y', lw=0.5, marker='.')
+    plt.show()
 
 
-def accumulate_homographies2(H_successive,m):
-    # H_successive.insert(m, np.eye(3))
-    print("to be accumulated", H_successive)
+def accumulate_homographies(H_successive,m):
     full_mat = [0]*(len(H_successive))
     full_mat.insert(m, np.eye(3))
     cur_mat = full_mat[m]
     for i in range(m-1,-1,-1):
         cur_mat = np.dot(cur_mat,H_successive[i])
-        full_mat[i] = cur_mat
+        full_mat[i] = cur_mat/cur_mat[2,2]
     cur_mat = full_mat[m]
-    for j in range(m,len(H_successive),):
+    for j in range(m,len(H_successive)):
         cur_mat = np.dot(cur_mat, np.linalg.inv(H_successive[j]))
-        full_mat[j+1] = cur_mat
-    final_warp = [(mat / mat[2, 2]).astype(np.float32) for mat in full_mat]
-    for i in final_warp:
-        print (i)
-    return final_warp
+        full_mat[j+1] = cur_mat/cur_mat[2,2]
+    return full_mat
 
-def accumulate_homographies(H_successive,m):
-    H2m = [None] * (len(H_successive) + 1)
-    H2m[m] = np.eye(3)
-
-    for i in range(m - 1, -1, -1):
-        H2m[i] = np.dot(H2m[i + 1], H_successive[i])
-
-    for i in range(m + 1, len(H_successive) + 1):
-        H2m[i] = np.dot(H2m[i - 1], np.linalg.inv(H_successive[i - 1]))
-    final_warp = [(mat / mat[2, 2]).astype(np.float32) for mat in H2m]
-    return final_warp
+# def accumulate_homographies2(H_successive, m):
+#     H2m = [None] * (len(H_successive) + 1)
+#     H2m[m] = np.eye(3)
+#
+#     for i in range(m - 1, -1, -1):
+#         H2m[i] = np.dot(H2m[i + 1], H_successive[i])
+#         H2m[i] = H2m[i]/H2m[i][2,2]
+#
+#     for i in range(m + 1, len(H_successive) + 1):
+#         H2m[i] = np.dot(H2m[i - 1], np.linalg.inv(H_successive[i - 1]))
+#         H2m[i] = H2m[i]/H2m[i][2,2]
+#
+#     return H2m
 
 def get_canves_size(ims,Hs):
     cord_mat = np.zeros((len(ims),4,2))
     for i,img in enumerate(ims):
             h,w = img.shape
             pos = np.fliplr(np.array([[0,0],[h,0],[0,w],[h,w]]))
-            # print(pos.shape)
             new_cord = apply_homography(pos,np.linalg.inv(Hs[i]))
-            # print(new_cord)
             cord_mat[i,:,:] = new_cord
-
     w_max = np.ceil(np.max(cord_mat[:, :, 0])).astype(np.int32)
     w_min = np.floor(np.min(cord_mat[:, :, 0])).astype(np.int32)
     row_max = np.ceil(np.max(cord_mat[:, :, 1])).astype(np.int32)
     row_min = np.floor(np.min(cord_mat[:, :, 1])).astype(np.int32)
-    # print(row_min, row_max, w_min, w_max)
-    # plt.scatter(np.ndarray.flatten(cord_mat[0,:, 0]),np.ndarray.flatten(cord_mat[0,:,1]),marker="o",
-    #             edgecolors="g")
-    # plt.scatter(np.ndarray.flatten(cord_mat[1, :, 0]), np.ndarray.flatten(cord_mat[1, :, 1]),marker="*",
-    #             edgecolors="b")
-    # plt.scatter(np.ndarray.flatten(cord_mat[2, :, 0]), np.ndarray.flatten(cord_mat[2, :, 1]),marker="*",
-    #             edgecolors="r")
-    # plt.scatter(np.ndarray.flatten(cord_mat[3, :, 0]), np.ndarray.flatten(cord_mat[3, :, 1]),marker="o",
-    #             edgecolors="y")
-    # plt.show()
     return row_min, row_max,w_min,w_max, cord_mat
 
 
-def get_boundris(ims,Hs):
-    centers = []
+def get_boundris(ims,Hs,w_min,w_max):
+    centers = [w_min]
     for i in range(len(ims)-1):
             h_1, w_1 = ims[i].shape
             h_2, w_2 = ims[i+1].shape
-            center_im_1 = np.fliplr(np.array([[int(h_1//2), int(w_1//2)]]))
-            center_im_2 = np.fliplr(np.array([[int(h_2//2), int(w_2//2)]]))
-            print("original centers", center_im_1, center_im_2)
-            print("Eldan homograph for im:\n", i, Hs[i], Hs[i+1])
+            center_im_1 = np.fliplr(np.array([[int(h_1//2),int(w_1//2)]]))
+            center_im_2 = np.fliplr(np.array([[int(h_2//2),int(w_2//2)]]))
             new_center_1 = np.fliplr(apply_homography(center_im_1,np.linalg.inv(Hs[i])))
             new_center_2 = np.fliplr(apply_homography(center_im_2,np.linalg.inv(Hs[i+1])))
-            print("centers", new_center_1, new_center_2)
             centers.append(int((new_center_1[:,1] + new_center_2[:,1])//2))
-
+    centers.append(w_max)
     return centers
 
-
-
-def render_panorama(ims,Hs):
-    row_min, row_max, w_min, w_max, cords = get_canves_size(ims, Hs)
-    print("eldan canvas size", w_min, w_max, row_min, row_max)
+def creat_panorame_index(row_min, row_max, w_min, w_max):
     totel_w = w_max - w_min
     totle_h = row_max - row_min
-    image_bound = [w_min]
-    image_bound.extend(get_boundris(ims, Hs))
-    image_bound.append(w_max)
-    print("eldan bounds", image_bound)
-    ny = np.linspace(row_min, row_max, totle_h).astype(np.int32)
+    ny = np.linspace(row_min,row_max,totle_h).astype(np.int32)
     nx = np.linspace(w_min, w_max, totel_w).astype(np.int32)
-    print("eldan linspace Y", np.min(ny), np.max(ny))
-    print("eldan linspace X", np.min(nx), np.max(nx))
+    return np.meshgrid(nx,ny)
 
-
-    canves_x_ind, canves_y_ind = np.meshgrid(nx,ny)
+def render_panorama(ims,Hs):
+    print("ELDAN HS\n\n", Hs)
+    row_min, row_max, w_min, w_max ,cords = get_canves_size(ims, Hs)
+    totel_w = w_max - w_min
+    totle_h = row_max - row_min
+    canves_bound = get_boundris(ims, Hs, w_min, w_max)
+    canves_x_ind, canves_y_ind = creat_panorame_index(row_min,row_max,w_min,w_max)
     final_im = creat_canves(totle_h,totel_w)
+    canves_bound = canves_bound - w_min
     for i, im in enumerate(ims):
-        im_left_bound = image_bound[i] + abs(w_min)
-        im_right_bound = image_bound[i+1] + abs(w_min)
-        # print("imge bound", (im_left_bound,im_right_bound))
-        # extra_left = 0 if i == 0 else 128
-        # extra_right = 0 if i == len(ims)-1 else 128
-        # left_ind_final = (im_left_bound - extra_left)
-        # right_ind_final = (im_right_bound + extra_right)
-        im_size = im_right_bound - im_left_bound
-        im_ind = creat_im_ind(canves_x_ind, canves_y_ind, [im_left_bound, im_size])
-        print("sent to apply\n", im_ind.shape)
-        warp_back_index = np.transpose(np.fliplr(apply_homography(im_ind, Hs[i])))
-        # print("eldan to interpolate",warp_back_index.shape)
-        image_int = ter.map_coordinates(im, warp_back_index, order=1, prefilter=False)
-
-
+        extand_left = 0 if i == 0 else 128
+        extand_right = 0 if i == len(ims)-1 else 128
+        l_canv_indx = (canves_bound[i] - extand_left)
+        r_canv_indx = (canves_bound[i+1] + extand_right)
+        im_size = r_canv_indx - l_canv_indx
+        pano_ind = creat_pano_index(canves_x_ind, canves_y_ind, [l_canv_indx, im_size])
+        warp_back_indx = np.transpose(np.fliplr(apply_homography(pano_ind,Hs[i])))
+        image_int = ter.map_coordinates(im, warp_back_indx, order=1, prefilter=False)
         image_strip = (image_int.astype(np.float32)).reshape((totle_h, im_size))
         if i == 0:
-            final_im[:, im_left_bound:im_right_bound] = image_strip
+            final_im[:, l_canv_indx:r_canv_indx] = image_strip
         else:
-            final_im = blending_images(final_im,image_strip,im_left_bound,im_right_bound,totle_h,totel_w,im_left_bound)
-    print(final_im.shape)
+            final_im = blending_images(final_im, image_strip,l_canv_indx,r_canv_indx,totle_h,totel_w,
+                                       canves_bound[i])
     return final_im
 
-def creat_im_ind(canve_cord_x, canve_cord_y, bounds):
-    # print("eldan bounds", bounds[0],bounds[0]+bounds[1])
+def creat_pano_index(canve_cord_x, canve_cord_y, bounds):
     x_cord = canve_cord_x[:,bounds[0]:bounds[0]+bounds[1]]
     y_cord = canve_cord_y[:,bounds[0]:bounds[0]+bounds[1]]
     indexs = np.zeros((np.size(x_cord), 2), dtype=np.float32)
@@ -325,69 +292,10 @@ def put_im_in_canves(totle_h,totel_w,left_ind_final,right_ind_final,im):
 
 def blending_images(final_im, im2,left_ind_final,right_ind_final,totle_h,totel_w,im_left_bound):
     mask = creat_binary_mask(im_left_bound,totle_h,totel_w)
-    resize_image_strip = put_im_in_canves(totle_h,totel_w,left_ind_final,right_ind_final,im2)
-    blanded_im = pyramid_blending(resize_image_strip,final_im,mask.astype(np.bool),14,3,3)
+    resize_image_strip = put_im_in_canves(totle_h,totel_w,left_ind_final,right_ind_final, im2)
+    blanded_im = pyramid_blending(resize_image_strip,final_im,mask.astype(np.bool),14,7,7)
     return blanded_im
 
 
 
 
-# if __name__ == '__main__':
-#     im = read_image("backyard2.jpg",GRAY)
-#     im2 = read_image("backyard3.jpg",GRAY)
-#     du_im = np.hstack((im,im2))
-#     gaus1 = build_gaussian_pyramid(im,3,3)[0]
-#     gaus2 = build_gaussian_pyramid(im2,3,3)[0]
-#     pos1,desc1 = find_features(gaus1)
-#     pos2,desc2 = find_features(gaus2)
-#     match_index1, mach_index2 = match_features(desc1,desc2,0.5)
-#     points1, points2 = pos1[match_index1,:], pos2[mach_index2,:]
-#     h12, inliners = ransac_homography(points1, points2, 1000, 6)
-#     display_matches(im,im2,points1,points2,inliners)
-
-
-
-# ny=np.linspace(-3,3,2*3+1)
-# discriptoer_x,discrip_y = np.meshgrid(nx,ny)
-# pos_4_1 = np.zeros((4,2))
-# print(pos_4_1)
-# a = np.array([[1,1],[2,5],[4,8],[3,4],[3,2]])
-# print(a.shape)
-# indices_for_rensac = np.arange(4)
-# print(indices_for_rensac)
-# np.random.shuffle(indices_for_rensac)
-# print(indices_for_rensac)
-# pos_4_1[nx] = a[indices_for_rensac[:4]]
-# print(pos_4_1)
-# nlarge_cord = np.array(a)
-# print(nlarge_cord.shape)
-# print(nlarge_cord)
-# three_cord = nlarge_cord
-# z_cord = np.ones((nlarge_cord.shape[0],nlarge_cord.shape[1]+1))
-# z_cord = z_cord + 3
-# z_cord[:,:-1]= three_cord
-# print(z_cord.shape)
-# print(z_cord)
-# z_cord = (z_cord).T
-# print(z_cord.shape)
-# print(z_cord)
-# z_cord = z_cord / z_cord[2,:]
-# print(z_cord.shape)
-# print(z_cord)
-# final_mat = np.zeros((nlarge_cord.shape[1],nlarge_cord.shape[0]))
-# final_mat[:,:]= z_cord[:-1,:]
-# print(final_mat)
-# b = np.zeros(discriptoer_x.shape)
-# print(discriptoer_x)
-# print(np.argsort(discriptoer_x,axis=0))
-# # b[] = 1
-# print(b)
-# # r[np.where(r>0.5)]=0
-# print(r)
-# print(r.shape)
-# r = r.reshape(-1,r.shape[-1])
-# print(r.shape)
-# print(np.argmax(match_mat[2,:]))
-# r[:,:,0] = discriptoer_x
-# r[:,:,1] = discrip_y
-# print(r)

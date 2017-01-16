@@ -20,7 +20,7 @@ DERIVE_VEC = np.array([[1], [0], [-1]])
 KERNEL_SIZE = 3
 K = 0.04
 GRAY_SCALE = 1
-SPREAD_RADIUS = 10
+SPREAD_RADIUS = 12
 SUB_IMG_WIDTH = 7
 SUB_IMG_HEIGHT = 7
 DESCRIPTOR_RADIUS = 3
@@ -286,7 +286,7 @@ def render_panorama(ims, Hs):
     :param Hs: list of M 3x3 homography matrices transforming points from coordinate system i to ponorama's coordinates
     :return: panorama: grayscale image composed of vertical strips
     """
-
+    print("KEREN HS\n\n", Hs)
     #transformed points: [top left, top right, bottom left, bottom right, center],   shape (N, 5, 2)
     transformed_points = transform_corners_center(ims, Hs)
     num_images = len(ims)
@@ -314,6 +314,9 @@ def render_panorama(ims, Hs):
         print("mid",mid)
         pan_x_bounds[j] = mid.astype(np.int32) + 1  #pan_x_bounds[j-1] + np.abs(mid).astype(np.int32)
     pan_x_bounds[num_images] = x_max
+
+    pan_x_bounds = sol4_eldan.get_boundris(ims, Hs, x_min, x_max)
+
     canvas_bounds = pan_x_bounds + np.abs(x_min)
     print("panoram bounds: ", pan_x_bounds)
 
@@ -366,13 +369,24 @@ def transform_corners_center(ims, Hs):
         #order: TOP LEFT, BOTTOME LEFT, TOP RIGHT, BOTTOM RIGHT, CENTER
         curr_corners = np.hstack(([0, 0], [im.shape[0]-1, 0], [0, im.shape[1]-1], [im.shape[0]-1, im.shape[1]-1]))
         center = [np.floor(im.shape[1]/2), np.floor(im.shape[0]/2)]
-        print("Keren corners before", center)
         curr_points = np.fliplr(np.hstack((curr_corners, center)).reshape(5,2))
-        print("\n\ncurr points", curr_points)
         transformed[i] = np.fliplr(apply_homography(curr_points, np.linalg.inv(Hs[i])))
     print("Keren corners after", transformed[:,4,:])
 
     return np.floor(transformed)
+
+# def get_boundris(ims,Hs,w_min,w_max):
+#     centers = [w_min]
+#     for i in range(len(ims)-1):
+#             h_1, w_1 = ims[i].shape
+#             h_2, w_2 = ims[i+1].shape
+#             center_im_1 = np.fliplr(np.array([[int(h_1//2),int(w_1//2)]]))
+#             center_im_2 = np.fliplr(np.array([[int(h_2//2),int(w_2//2)]]))
+#             new_center_1 = np.fliplr(apply_homography(center_im_1,np.linalg.inv(Hs[i])))
+#             new_center_2 = np.fliplr(apply_homography(center_im_2,np.linalg.inv(Hs[i+1])))
+#             centers.append(int((new_center_1[:,1] + new_center_2[:,1])//2))
+#     centers.append(w_max)
+#     return centers
 
 def test():
     img1 = utils.read_image('external/office1.jpg', GRAY_SCALE)
@@ -425,6 +439,14 @@ def test_homography():
 if __name__ == "__main__":
     img1 = utils.read_image('external/office1.jpg', GRAY_SCALE)
     img2 = utils.read_image('external/office1.jpg', GRAY_SCALE)
-    test_harris(img1)
-
+    # test_harris(img1)
+    keren_hs = ([[  4.80072101e-01,   1.03722298e-01,   3.42033805e+02],
+       [ -2.38121994e-01,   9.57420397e-01,  -2.84753684e+01],
+       [ -1.06524606e-03,   8.89081848e-05,   1.00000000e+00]])
+    eldan_hs = ([[  4.80072101e-01,   1.03722298e-01,   3.42033805e+02],
+       [ -2.38121994e-01,   9.57420397e-01,  -2.84753684e+01],
+       [ -1.06524606e-03,   8.89081848e-05,   1.00000000e+00]])
+    point = np.array([187, 250, 100,50, 5, 5, 7, 20]).reshape(4,2)
+    print("keren hs", sol4_eldan.apply_homography(point, keren_hs))
+    print("eldan hs",sol4_eldan.apply_homography(point, eldan_hs))
 
