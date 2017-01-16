@@ -4,7 +4,7 @@
 # EXERCISE: Image Processing ex4 2016-2017
 # DESCRIPTION:
 ##############################################################################
-import sol4_eldan
+import sol4_utils_eldan
 import sol4_utils as utils
 import scipy
 import numpy as np
@@ -28,6 +28,7 @@ LEVEL3_COORDS_CONV = 4
 MIN_SCORE = 0.1
 INLIER_TOL = 20
 RANSAC_ITERS = 500
+BLEND_FACTOR = 20
 
 
 def harris_corner_detector(im):
@@ -292,26 +293,14 @@ def render_panorama(ims, Hs):
 
     #panorama boundaries
     ROW_AXIS, COL_AXIS = 0, 1
-    TOP_LEFT, BOTTOM_LEFT, TOP_RIGHT, BOTTOM_RIGHT = 0, 1, 2, 3
     x_min = np.floor(np.min(transformed_points[0, :, COL_AXIS]))
     x_max = np.ceil(np.max(transformed_points[num_images-1, :, COL_AXIS]))
     y_min = np.floor(np.min(transformed_points[:, :, ROW_AXIS]))
     y_max = np.ceil(np.max(transformed_points[:, :, ROW_AXIS]))
     p_width = np.abs(x_max - x_min)
     p_height = np.abs(y_max - y_min)
-    panorama = np.zeros((p_height, p_width))
-
-
-    #vertical strips in panorama
-    # pan_x_bounds = np.zeros(num_images+1)
-    # pan_x_bounds[0] = x_min
-    # print("xmin", x_min, y_min, x_max, y_max)
-    # for j in np.arange(1, num_images):
-    #     print("center", transformed_points[j-1, CENTER, COL_AXIS])
-    #     mid = (transformed_points[j-1, CENTER, COL_AXIS] + transformed_points[j, CENTER, COL_AXIS]) / 2
-    #     print("mid",mid)
-    #     pan_x_bounds[j] = mid.astype(np.int32) + 1  #pan_x_bounds[j-1] + np.abs(mid).astype(np.int32)
-    # pan_x_bounds[num_images] = x_max
+    panorama1 = np.zeros((p_height, p_width))
+    panorama2 = panorama1[:,:]
 
     pan_x_bounds = get_centers_helper(ims, Hs, x_min, x_max)
     canvas_bounds = pan_x_bounds + np.abs(x_min)
@@ -323,9 +312,14 @@ def render_panorama(ims, Hs):
 
     #backwarping
     for k in np.arange(num_images):
-        curr_x_min = np.floor(canvas_bounds[k])
-        curr_x_max = np.ceil(canvas_bounds[k+1])
-        shift = np.abs(x_min)
+        panorama2 = np.zeros((p_height, p_width))
+
+        curr_x_min = np.floor(canvas_bounds[k]) - BLEND_FACTOR
+        curr_x_max = np.ceil(canvas_bounds[k+1]) + BLEND_FACTOR
+
+        if k == 0:
+            curr_x_min = 0
+
         curr_x_range = (x[:, curr_x_min : curr_x_max+1].flatten())
         curr_y_range = (y[:, curr_x_min : curr_x_max+1].flatten())
 
@@ -335,16 +329,19 @@ def render_panorama(ims, Hs):
         original_area = apply_homography(pan_area, Hs[k])
 
         to_interpolate = np.transpose(np.fliplr(original_area))
-        # print("to interpolate", to_interpolate.shape)
         intensities = scipy.ndimage.map_coordinates(ims[k], to_interpolate, order=1, prefilter=False)
-        if k == num_images - 1:
-            panorama[:, canvas_bounds[k]:] = intensities.reshape(p_height, intensities.size / p_height)
+        if k == 0:
+            panorama1[:, :curr_x_max+1] = intensities.reshape(p_height, intensities.size / p_height)
+        elif k == num_images - 1:
+            panorama2[:, curr_x_min:] = intensities.reshape(p_height, intensities.size / p_height)
         else:
+            panorama2[:, curr_x_min:curr_x_max + 1] = intensities.reshape(p_height, intensities.size / p_height)
 
-            panorama[:, curr_x_min:curr_x_max+1] = intensities.reshape(p_height, intensities.size/
-                                                                                     p_height)
+        if k > 0:
+            middle = curr_x_min + BLEND_FACTOR
+            panorama1 = blend_panorama(panorama1, panorama2, middle)
 
-    return panorama
+    return panorama1
 
 
 
@@ -381,65 +378,10 @@ def get_centers_helper(ims, Hs, x_min, x_max):
     return centers
 
 
-def test():
-    img1 = utils.read_image('external/office1.jpg', GRAY_SCALE)
-    img2 = utils.read_image('external/office1.jpg', GRAY_SCALE)
-    # img3 = utils.read_image('external/office3.jpg', GRAY_SCALE)
-    # img4 = utils.read_image('external/office4.jpg', GRAY_SCALE)
+def blend_panorama(pan1, pan2, middle):
+    mask = np.ones(pan1.shape)
+    mask[:, :middle + 1] = 0
+    blended = utils.pyramid_blending(pan2, pan1, mask, 5, 5, 5)
+    return blended
 
-
-    pyr1 = utils.build_gaussian_pyramid(img1, 3, 3)
-    pyr2 = utils.build_gaussian_pyramid(img2, 3, 3)
-    feat1, desc1 = find_features(np.array(pyr1[0]))
-    feat2, desc2 = find_features(np.array(pyr2[0]))
-    ind1, ind2 = match_features(desc1, desc2, MIN_SCORE)
-    feat1, feat2 = feat1[ind1,:], feat2[ind2,:]
-
-    H12, inliers12 = ransac_homography(feat1, feat2, RANSAC_ITERS, INLIER_TOL)
-    display_matches(img1, img2, feat1, feat2, inliers12)
-
-
-def test_ransac(im1, im2):
-    pass
-    # H12, inliers = sol4_naomi.ransac_homography(pos1, pos2, RANSAC_ITERS, INLIER_TOL)
-    # print("==NAOMI==\nH12: \n", H12, "inliers:\n", inliers)
-    # H12, inliers = ransac_homography(pos1, pos2, RANSAC_ITERS, INLIER_TOL)
-    # print("==KEREN==\nH12: \n", H12, "inliers:\n", inliers)
-
-def test_matching(desc1, desc2):
-    match_features(desc1, desc2, MIN_SCORE)
-
-
-def test_harris(img):
-    features = sol4_add.spread_out_corners(img, SUB_IMG_HEIGHT, SUB_IMG_WIDTH, SPREAD_RADIUS)
-    # features = sol4.harris_corner_detector(img)
-    x_coords = features[:,0]
-    y_coords = features[:,1]
-    plt.imshow(img, plt.cm.gray)
-    plt.plot(x_coords, y_coords, '.')
-    plt.show()
-    return features
-
-def test_mops(img, pos):
-    descriptors = sample_descriptor(img, pos, DESCRIPTOR_RADIUS)
-    return descriptors
-
-def test_homography():
-    H = np.ones(9).reshape(3,3)
-    pos = np.arange(4).reshape((2,2))
-    apply_homography(pos, H)
-
-if __name__ == "__main__":
-    img1 = utils.read_image('external/office1.jpg', GRAY_SCALE)
-    img2 = utils.read_image('external/office1.jpg', GRAY_SCALE)
-    # test_harris(img1)
-    keren_hs = ([[  4.80072101e-01,   1.03722298e-01,   3.42033805e+02],
-       [ -2.38121994e-01,   9.57420397e-01,  -2.84753684e+01],
-       [ -1.06524606e-03,   8.89081848e-05,   1.00000000e+00]])
-    eldan_hs = ([[  4.80072101e-01,   1.03722298e-01,   3.42033805e+02],
-       [ -2.38121994e-01,   9.57420397e-01,  -2.84753684e+01],
-       [ -1.06524606e-03,   8.89081848e-05,   1.00000000e+00]])
-    point = np.array([187, 250, 100,50, 5, 5, 7, 20]).reshape(4,2)
-    print("keren hs", sol4_eldan.apply_homography(point, keren_hs))
-    print("eldan hs",sol4_eldan.apply_homography(point, eldan_hs))
 
