@@ -4,7 +4,6 @@
 # EXERCISE: Image Processing ex4 2016-2017
 # DESCRIPTION:
 ##############################################################################
-import sol4_utils_eldan
 import sol4_utils as utils
 import scipy
 import numpy as np
@@ -12,8 +11,7 @@ import sol4_add
 import matplotlib.pyplot as plt
 from numpy import random
 
-import sol4_eldan #todo DELETE
-
+import sol4_utils_eldan #todo delete
 
 
 DERIVE_VEC = np.array([[1], [0], [-1]])
@@ -26,9 +24,9 @@ SUB_IMG_HEIGHT = 7
 DESCRIPTOR_RADIUS = 3
 LEVEL3_COORDS_CONV = 4
 MIN_SCORE = 0.1
-INLIER_TOL = 20
-RANSAC_ITERS = 500
-BLEND_FACTOR = 20
+INLIER_TOL = 9
+RANSAC_ITERS = 10000
+BLEND_FACTOR = 120
 
 
 def harris_corner_detector(im):
@@ -87,7 +85,7 @@ def sample_descriptor(im, pos, desc_rad):
     coords = np.row_stack((y_coords.flatten(), x_coords.flatten()))
     descriptors = np.zeros((k * k * len(pos))).reshape(k, k, len(pos))
 
-    for i in np.arange(len(pos)):
+    for i in np.arange(pos.shape[0]):
         temp = scipy.ndimage.map_coordinates(im, coords[:,i*(k*k):(i+1)*k*k], order=1, prefilter=False)
         descriptors[:,:,i] = temp.reshape((k,k))
         mean_dist = descriptors[:,:,i] - (descriptors[:,:,i]).mean()
@@ -128,20 +126,19 @@ def match_features(desc1, desc2, min_score):
     desc2_mat = desc2.reshape(-1, N2).astype(np.float32)
 
     S_match_weight = np.dot(desc1_mat, desc2_mat).astype(np.float32)
-    # S_match_weight = np.array([[7,9,3],[5,6,4],[2,8,1]])
 
     #get 2 maximal values for columns and rows
     sorted_cols = np.argsort(S_match_weight, axis=0)[S_match_weight.shape[0]-2:,:]
-    sorted_rows = np.argsort(S_match_weight, axis=1)[:,S_match_weight.shape[1]-2:]
+    sorted_rows = np.argsort(S_match_weight, axis=1)[:, S_match_weight.shape[1]-2:]
 
     #set in S_match_weight 1 if 2max, otherwise 0
     S_max_cols = np.zeros(S_match_weight.shape)
     S_max_rows = np.zeros(S_match_weight.shape)
 
-    for i in range(sorted_cols.shape[1]):
+    for i in np.arange(sorted_cols.shape[1]):
         S_max_cols[sorted_cols[0, i], i] = 1
         S_max_cols[sorted_cols[1, i], i] = 1
-    for i in range(sorted_rows.shape[0]):
+    for i in np.arange(sorted_rows.shape[0]):
         S_max_rows[i, sorted_rows[i, 0]] = 1
         S_max_rows[i, sorted_rows[i, 1]] = 1
 
@@ -152,8 +149,8 @@ def match_features(desc1, desc2, min_score):
     max_both = np.multiply(max_both, S_min_score_thresh)
     matches_indexes = np.argwhere(max_both == 1)
 
-    match_ind1 = matches_indexes[:,0]
-    match_ind2 = matches_indexes[:,1]
+    match_ind1 = matches_indexes[:, 0]
+    match_ind2 = matches_indexes[:, 1]
 
     return match_ind1, match_ind2
 
@@ -167,8 +164,10 @@ def apply_homography(pos1, H12):
     """
     prev_points = np.insert(pos1, 2, 1, axis=1)
     transformed = np.dot(H12, prev_points.T)
+    transformed = np.nan_to_num(transformed)
+    if not np.all(transformed[2, :]):
+        return transformed[:2, :].T
     new_points = transformed[:2, :] / (transformed[2, :])
-    new_points = np.nan_to_num(new_points)
     return new_points.T
 
 
@@ -184,9 +183,12 @@ def ransac_homography(pos1, pos2, num_iters, inlier_tol):
             inliers: array of shape (S,) of indices in pos1/pos2 of the max set of inliers found
             if no inliers found, returns (None, None)
     """
-    #todo fix all np.arange back to regular python range() in loops
-
-    max_inliers = ransac_homography_helper(pos1, pos2, inlier_tol)
+    while True:
+        try:
+            max_inliers = ransac_homography_helper(pos1, pos2, inlier_tol)
+        except ValueError:
+            continue
+        break
     max_inliers_size = max_inliers.size
     for _ in np.arange(num_iters):
         try:
@@ -199,13 +201,6 @@ def ransac_homography(pos1, pos2, num_iters, inlier_tol):
     points1, points2 = (pos1[max_inliers]), (pos2[max_inliers])
     H12 = sol4_add.least_squares_homography(points2, points1)
 
-    if H12 is None: #todo remove
-        print("H none")
-    # transformed = apply_homography(pos1, H12)
-    # error = np.linalg.norm((transformed - pos2), axis=1) ** 2
-    # final_inlier_indices = np.where(error < inlier_tol)[0]
-    # print("indice===========\n", final_inlier_indices.shape)
-    # print("ransac:\n\n", H12, final_inlier_indices.reshape(final_inlier_indices.size,))
     return H12, max_inliers.reshape(max_inliers.size,)
 
 
@@ -223,9 +218,7 @@ def ransac_homography_helper(pos1, pos2, inlier_tol):
     random_indices = random.permutation(rand_range)[:4]
     random_pos1 = pos1[random_indices]
     random_pos2 = pos2[random_indices]
-    # print("=== NEW ITER POINTS ===", random_indices)
     H12 = sol4_add.least_squares_homography(random_pos1, random_pos2)
-    # print("--- H ---", H12)
     if H12 is None:
         raise ValueError
 
@@ -243,20 +236,20 @@ def display_matches(im1, im2, pos1, pos2, inliers):
     :param inliers: array of shape (S,) with inlier matches (indices for pos1/pos2)
     """
     combined_img = np.hstack((im1, im2))
-    pos2[:,0] = pos2[:,0] + im1.shape[1]
+    pos2[:, 0] = pos2[:, 0] + im1.shape[1]
     inlier_points1, inlier_points2 = pos1[inliers], pos2[inliers]
 
     outlier_indices = np.arange(pos1.shape[0])
     outlier_indices = np.delete(outlier_indices, inliers)
     outlier_points1, outlier_points2 = pos1[outlier_indices], pos2[outlier_indices]
 
-    # plt.figure
-    # plt.imshow(combined_img, plt.cm.gray)
-    # plt.plot((inlier_points1[:,0], inlier_points2[:,0]),(inlier_points1[:,1], inlier_points2[:,1]), mfc='r',
-    #          c='y', lw=0.5, marker='.')
-    # plt.plot((outlier_points1[:,0], outlier_points2[:,0]),(outlier_points1[:,1], outlier_points2[:,1]), mfc='r',
-    #          c='b', lw=0.5, marker='.')
-    # plt.show()
+    plt.figure
+    plt.imshow(combined_img, plt.cm.gray)
+    plt.plot((inlier_points1[:,0], inlier_points2[:,0]),(inlier_points1[:,1], inlier_points2[:,1]), mfc='r',
+             c='y', lw=0.5, marker='.')
+    plt.plot((outlier_points1[:,0], outlier_points2[:,0]),(outlier_points1[:,1], outlier_points2[:,1]), mfc='r',
+             c='b', lw=0.5, marker='.')
+    plt.show()
 
 
 def accumulate_homographies(H_succesive, m):
@@ -297,10 +290,9 @@ def render_panorama(ims, Hs):
     x_max = np.ceil(np.max(transformed_points[num_images-1, :, COL_AXIS]))
     y_min = np.floor(np.min(transformed_points[:, :, ROW_AXIS]))
     y_max = np.ceil(np.max(transformed_points[:, :, ROW_AXIS]))
-    p_width = np.abs(x_max - x_min)
-    p_height = np.abs(y_max - y_min)
+    p_width = np.abs(x_max - x_min).astype(np.int32)
+    p_height = np.abs(y_max - y_min).astype(np.int32)
     panorama1 = np.zeros((p_height, p_width))
-    panorama2 = panorama1[:,:]
 
     pan_x_bounds = get_centers_helper(ims, Hs, x_min, x_max)
     canvas_bounds = pan_x_bounds + np.abs(x_min)
@@ -314,8 +306,8 @@ def render_panorama(ims, Hs):
     for k in np.arange(num_images):
         panorama2 = np.zeros((p_height, p_width))
 
-        curr_x_min = np.floor(canvas_bounds[k]) - BLEND_FACTOR
-        curr_x_max = np.ceil(canvas_bounds[k+1]) + BLEND_FACTOR
+        curr_x_min = (np.floor(canvas_bounds[k]) - BLEND_FACTOR).astype(np.int32)
+        curr_x_max = (np.ceil(canvas_bounds[k+1]) + BLEND_FACTOR).astype(np.int32)
 
         if k == 0:
             curr_x_min = 0
@@ -331,11 +323,15 @@ def render_panorama(ims, Hs):
         to_interpolate = np.transpose(np.fliplr(original_area))
         intensities = scipy.ndimage.map_coordinates(ims[k], to_interpolate, order=1, prefilter=False)
         if k == 0:
-            panorama1[:, :curr_x_max+1] = intensities.reshape(p_height, intensities.size / p_height)
+            panorama1[:, :curr_x_max+1] = intensities.reshape(p_height, (intensities.size /
+                                                                         p_height).astype(np.int32))
         elif k == num_images - 1:
-            panorama2[:, curr_x_min:] = intensities.reshape(p_height, intensities.size / p_height)
+            panorama2[:, curr_x_min:] = intensities.reshape(p_height, (intensities.size / p_height).astype(
+                np.int32))
         else:
-            panorama2[:, curr_x_min:curr_x_max + 1] = intensities.reshape(p_height, intensities.size / p_height)
+            panorama2[:, curr_x_min:curr_x_max + 1] = intensities.reshape(p_height, (intensities.size /
+                                                                                     p_height).astype(
+                np.int32))
 
         if k > 0:
             middle = curr_x_min + BLEND_FACTOR
@@ -365,6 +361,13 @@ def transform_corners_center(ims, Hs):
 
 
 def get_centers_helper(ims, Hs, x_min, x_max):
+    """
+    Find centers between given images, in their homographic transformation representation
+    :param ims: list of N grayscale images
+    :param Hs: list of M 3x3 homography matrices transforming points from coordinate system i to ponorama's coordinates
+    :param x_min, x_max: edge points of total panoramic image
+    :return: list of N+1 points (including the minimal and maximal edges)
+    """
     centers = [x_min]
     for i in np.arange(len(ims)-1):
             height1, width1 = ims[i].shape
@@ -379,9 +382,16 @@ def get_centers_helper(ims, Hs, x_min, x_max):
 
 
 def blend_panorama(pan1, pan2, middle):
+    """
+    Blend two given images in a axis
+    :param pan1, pan2: grayscale images
+    :param middle: index of col to blend at
+    :return: blended image
+    """
     mask = np.ones(pan1.shape)
     mask[:, :middle + 1] = 0
-    blended = utils.pyramid_blending(pan2, pan1, mask, 5, 5, 5)
+    blended = utils.pyramid_blending(pan2, pan1, mask, max_levels=7, filter_size_im=21,
+                                        filter_size_mask=21)
     return blended
 
 
