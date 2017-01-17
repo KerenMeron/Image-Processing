@@ -2,16 +2,15 @@
 # FILE: sol4.py
 # WRITER: Keren Meron, keren.meron, 200039626
 # EXERCISE: Image Processing ex4 2016-2017
-# DESCRIPTION:
+# DESCRIPTION: creating a panorama from several images
 ##############################################################################
+
 import sol4_utils as utils
 import scipy
 import numpy as np
 import sol4_add
 import matplotlib.pyplot as plt
 from numpy import random
-
-import sol4_utils_eldan #todo delete
 
 
 DERIVE_VEC = np.array([[1], [0], [-1]])
@@ -35,7 +34,6 @@ def harris_corner_detector(im):
     :param im: grayscale image to find key points inside
     :return: pos - array of shape (N,2) of [x,y] key points' locations in im
     """
-
     Ix = scipy.signal.convolve2d(im, DERIVE_VEC, mode='same')
     Iy = scipy.signal.convolve2d(im, np.array(np.transpose(DERIVE_VEC)), mode='same')
     kernel = utils.get_Gauss_Kernel(KERNEL_SIZE)
@@ -46,7 +44,6 @@ def harris_corner_detector(im):
 
     response = response_from_derivatives(Ix_pow_blur, Ix_Iy_blur, Iy_pow_blur)
     max_responses = sol4_add.non_maximum_suppression(response)
-    # coords = np.column_stack(np.where(max_responses))
     corners = np.nonzero(max_responses)
     return np.fliplr(np.array(list(np.transpose(corners))))
 
@@ -280,7 +277,7 @@ def render_panorama(ims, Hs):
     :param Hs: list of M 3x3 homography matrices transforming points from coordinate system i to ponorama's coordinates
     :return: panorama: grayscale image composed of vertical strips
     """
-    #transformed points: [top left, top right, bottom left, bottom right, center],   shape (N, 5, 2)
+    #transformed points: [top left, top right, bottom left, bottom right, center], shape (N, 4, 2)
     transformed_points = transform_corners_center(ims, Hs)
     num_images = len(ims)
 
@@ -302,18 +299,24 @@ def render_panorama(ims, Hs):
     y_range = np.linspace(y_min, y_max, p_height).astype(np.int32)
     x, y = np.meshgrid(x_range, y_range)
 
-    #backwarping
+    return backwarping(panorama1, ims, Hs, p_height, p_width, canvas_bounds, x, y)
+
+
+def backwarping(panorama, ims, Hs, p_height, p_width, canvas_bounds, x_mesh, y_mesh):
+    """ Places images into panorama, after homographic transformations and blending. """
+
+    num_images = len(ims)
     for k in np.arange(num_images):
         panorama2 = np.zeros((p_height, p_width))
 
         curr_x_min = (np.floor(canvas_bounds[k]) - BLEND_FACTOR).astype(np.int32)
-        curr_x_max = (np.ceil(canvas_bounds[k+1]) + BLEND_FACTOR).astype(np.int32)
+        curr_x_max = (np.ceil(canvas_bounds[k + 1]) + BLEND_FACTOR).astype(np.int32)
 
         if k == 0:
             curr_x_min = 0
 
-        curr_x_range = (x[:, curr_x_min : curr_x_max+1].flatten())
-        curr_y_range = (y[:, curr_x_min : curr_x_max+1].flatten())
+        curr_x_range = (x_mesh[:, curr_x_min: curr_x_max + 1].flatten())
+        curr_y_range = (y_mesh[:, curr_x_min: curr_x_max + 1].flatten())
 
         pan_area = np.zeros(curr_x_range.size * 2).reshape(curr_x_range.size, 2)
         pan_area[:, 0] = curr_x_range
@@ -322,23 +325,20 @@ def render_panorama(ims, Hs):
 
         to_interpolate = np.transpose(np.fliplr(original_area))
         intensities = scipy.ndimage.map_coordinates(ims[k], to_interpolate, order=1, prefilter=False)
+        intensities = intensities.reshape(p_height, (intensities.size / p_height).astype(np.int32))
         if k == 0:
-            panorama1[:, :curr_x_max+1] = intensities.reshape(p_height, (intensities.size /
-                                                                         p_height).astype(np.int32))
+            panorama[:, :curr_x_max + 1] = intensities
         elif k == num_images - 1:
-            panorama2[:, curr_x_min:] = intensities.reshape(p_height, (intensities.size / p_height).astype(
-                np.int32))
+            panorama2[:, curr_x_min:] = intensities
         else:
-            panorama2[:, curr_x_min:curr_x_max + 1] = intensities.reshape(p_height, (intensities.size /
-                                                                                     p_height).astype(
-                np.int32))
+            panorama2[:, curr_x_min:curr_x_max + 1] = intensities
 
+        # blend together
         if k > 0:
             middle = curr_x_min + BLEND_FACTOR
-            panorama1 = blend_panorama(panorama1, panorama2, middle)
+            panorama = blend_panorama(panorama, panorama2, middle)
 
-    return panorama1
-
+    return panorama
 
 
 def transform_corners_center(ims, Hs):
@@ -390,8 +390,8 @@ def blend_panorama(pan1, pan2, middle):
     """
     mask = np.ones(pan1.shape)
     mask[:, :middle + 1] = 0
-    blended = utils.pyramid_blending(pan2, pan1, mask, max_levels=7, filter_size_im=21,
-                                        filter_size_mask=21)
+    blended = utils.pyramid_blending(pan2, pan1, mask, max_levels=7, filter_size_im=11,
+                                        filter_size_mask=11)
     return blended
 
 
