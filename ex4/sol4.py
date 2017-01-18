@@ -92,7 +92,7 @@ def sample_descriptor(im, pos, desc_rad):
         else:
             descriptors[:,:,i] = np.zeros(descriptors[:,:,i].shape)
 
-    return descriptors
+    return descriptors.astype(np.float32)
 
 
 def find_features(pyr):
