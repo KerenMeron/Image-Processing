@@ -17,7 +17,7 @@ DERIVE_VEC = np.array([[1], [0], [-1]])
 KERNEL_SIZE = 3
 K = 0.04
 GRAY_SCALE = 1
-SPREAD_RADIUS = 12
+SPREAD_RADIUS = 3
 SUB_IMG_WIDTH = 7
 SUB_IMG_HEIGHT = 7
 DESCRIPTOR_RADIUS = 3
@@ -196,7 +196,7 @@ def ransac_homography(pos1, pos2, num_iters, inlier_tol):
             continue
 
     points1, points2 = (pos1[max_inliers]), (pos2[max_inliers])
-    H12 = sol4_add.least_squares_homography(points2, points1)
+    H12 = sol4_add.least_squares_homography(points1, points2)
 
     return H12, max_inliers.reshape(max_inliers.size,)
 
@@ -220,7 +220,7 @@ def ransac_homography_helper(pos1, pos2, inlier_tol):
         raise ValueError
 
     transformed = apply_homography(pos1, H12)
-    error = np.linalg.norm((transformed - pos2), axis=1)
+    error = np.linalg.norm((transformed - pos2), axis=1) ** 2
     inlier_indices = np.where(error < inlier_tol)[0]
     return inlier_indices.flatten()
 
@@ -242,10 +242,10 @@ def display_matches(im1, im2, pos1, pos2, inliers):
 
     plt.figure
     plt.imshow(combined_img, plt.cm.gray)
-    plt.plot((inlier_points1[:,0], inlier_points2[:,0]),(inlier_points1[:,1], inlier_points2[:,1]), mfc='r',
-             c='y', lw=0.5, marker='.')
     plt.plot((outlier_points1[:,0], outlier_points2[:,0]),(outlier_points1[:,1], outlier_points2[:,1]), mfc='r',
              c='b', lw=0.5, marker='.')
+    plt.plot((inlier_points1[:,0], inlier_points2[:,0]),(inlier_points1[:,1], inlier_points2[:,1]), mfc='r',
+             c='y', lw=0.5, marker='.')
     plt.show()
 
 
@@ -278,7 +278,7 @@ def render_panorama(ims, Hs):
     :return: panorama: grayscale image composed of vertical strips
     """
     #transformed points: [top left, top right, bottom left, bottom right, center], shape (N, 4, 2)
-    transformed_points = transform_corners_center(ims, Hs)
+    transformed_points = transform_corners(ims, Hs)
     num_images = len(ims)
 
     #panorama boundaries
@@ -321,7 +321,7 @@ def backwarping(panorama, ims, Hs, p_height, p_width, canvas_bounds, x_mesh, y_m
         pan_area = np.zeros(curr_x_range.size * 2).reshape(curr_x_range.size, 2)
         pan_area[:, 0] = curr_x_range
         pan_area[:, 1] = curr_y_range
-        original_area = apply_homography(pan_area, Hs[k])
+        original_area = apply_homography(pan_area, np.linalg.inv(Hs[k]))
 
         to_interpolate = np.transpose(np.fliplr(original_area))
         intensities = scipy.ndimage.map_coordinates(ims[k], to_interpolate, order=1, prefilter=False)
@@ -341,22 +341,22 @@ def backwarping(panorama, ims, Hs, p_height, p_width, canvas_bounds, x_mesh, y_m
     return panorama
 
 
-def transform_corners_center(ims, Hs):
+def transform_corners(ims, Hs):
     """
-    Transform 4 corner coordinates and center in each image in ims by its corresponding homography matrix
+    Transform 4 corner coordinates in each image in ims by its corresponding homography matrix
     :param ims: list of grayscale images
     :param Hs: list of M 3x3 homography matrices transforming points from coordinate system i to ponorama's coordinates
-    :return: array of shape (N, 5, 2) with transformed [x,y] points
+    :return: array of shape (N, 4, 2) with transformed [x,y] points
     """
     num_images = len(ims)
     transformed = np.zeros(4 * 2 * num_images).reshape(num_images, 4, 2)
 
     for i in np.arange(num_images):
         im = ims[i]
-        #order: TOP LEFT, BOTTOME LEFT, TOP RIGHT, BOTTOM RIGHT, CENTER
+        #order: TOP LEFT, BOTTOME LEFT, TOP RIGHT, BOTTOM RIGHT
         curr_corners = np.hstack(([0, 0], [im.shape[0]-1, 0], [0, im.shape[1]-1], [im.shape[0]-1, im.shape[1]-1]))
         curr_points = np.fliplr(curr_corners.reshape(4, 2))
-        transformed[i] = np.fliplr(apply_homography(curr_points, np.linalg.inv(Hs[i])))
+        transformed[i] = np.fliplr(apply_homography(curr_points, (Hs[i])))
     return np.floor(transformed)
 
 
@@ -370,13 +370,11 @@ def get_centers_helper(ims, Hs, x_min, x_max):
     """
     centers = [x_min]
     for i in np.arange(len(ims)-1):
-            height1, width1 = ims[i].shape
-            height2, width2 = ims[i+1].shape
-            original_center1 = np.fliplr(np.array([[int(height1//2), int(width1//2)]]))
-            original_center2 = np.fliplr(np.array([[int(height2//2), int(width2//2)]]))
-            new_center_1 = np.fliplr(apply_homography(original_center1, np.linalg.inv(Hs[i])))
-            new_center_2 = np.fliplr(apply_homography(original_center2, np.linalg.inv(Hs[i+1])))
-            centers.append(int((new_center_1[: ,1] + new_center_2[: ,1])//2))
+            original_center1 = np.fliplr(np.array([[int(ims[i].shape[0]//2), int(ims[i].shape[1]//2)]]))
+            original_center2 = np.fliplr(np.array([[int(ims[i+1].shape[0]//2), int(ims[i+1].shape[1]//2)]]))
+            new_center_1 = (apply_homography(original_center1, (Hs[i])))
+            new_center_2 = (apply_homography(original_center2, (Hs[i+1])))
+            centers.append(int((new_center_1[:, 0] + new_center_2[:, 0])//2))
     centers.append(x_max)
     return centers
 
@@ -390,8 +388,6 @@ def blend_panorama(pan1, pan2, middle):
     """
     mask = np.ones(pan1.shape)
     mask[:, :middle + 1] = 0
-    blended = utils.pyramid_blending(pan2, pan1, mask, max_levels=7, filter_size_im=11,
-                                        filter_size_mask=11)
-    return blended
+    return utils.pyramid_blending(pan2, pan1, mask, max_levels=7, filter_size_im=11, filter_size_mask=11)
 
 

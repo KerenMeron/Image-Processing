@@ -11,6 +11,8 @@ from scipy.misc import imread, imsave
 from skimage.color import rgb2gray
 import matplotlib.pyplot as plt
 import os
+from scipy import ndimage
+
 
 EXPAND_FACTOR = 2
 SAMPLE_JUMP = 2
@@ -123,7 +125,8 @@ def blur_spatial_kernel(im, kernel):
     :param kernel: 1D-row used for pyramid construction, normalized
     :return: blurred image
     """
-    return scipy.signal.convolve2d(im, kernel, mode='same', boundary='fill')
+    rows = ndimage.filters.convolve(im, kernel, mode='wrap').astype(np.float32)
+    return ndimage.filters.convolve(rows, kernel.T, mode='wrap').astype(np.float32)
 
 
 def build_gaussian_pyramid(im, max_levels, filter_size):
@@ -144,7 +147,7 @@ def build_gaussian_pyramid(im, max_levels, filter_size):
     return pyr, filter_vec
 
 
-def pad_zeros(im):
+def pad_zeros(im, dest_size):
     """
     Pad image with zeros in uneven indices (between rows and columns, excluding boundaries)
     :param im: grayscale image with double values in [0,1]
@@ -153,28 +156,23 @@ def pad_zeros(im):
     padded = np.insert(im, slice(1, None), 0, axis=1)
     padded = np.insert(padded, slice(1, None), 0, axis=0)
 
-    if padded.shape[0] != im.shape[0]:
-        # indices_row = np.arange(padded.shape[1])
-        # padded = np.append(padded, indices_row, 0, axis=0)
-        indices_row = np.zeros((1, padded.shape[1])).astype(np.float32)
-        padded = np.append(padded, indices_row, axis=0)
-    if padded.shape[1] != im.shape[1]:
-        # indices_col = np.arange(padded.shape[0])
-        # padded = np.append(padded, indices_col, 0, axis=1)
+    if padded.shape[1] != dest_size[1]:
         indices_col = np.zeros((padded.shape[0], 1)).astype(np.float32)
         padded = np.append(padded, indices_col, axis=1)
+    if padded.shape[0] != dest_size[0]:
+        indices_row = np.zeros((1, padded.shape[1])).astype(np.float32)
+        padded = np.append(padded, indices_row, axis=0)
     return padded
 
-def expand(im, kernel):
+
+def expand(im, kernel, dest_size):
     """
     Expands a given image to twice its size
     :param im: grayscale image with double values in [0,1]
     :return: expanded im, same type as im
     """
-    print("before expand", im.shape)
-    padded_im = pad_zeros(im)
-    print("after expand", im.shape)
-    return blur_spatial_kernel(padded_im, kernel * EXPAND_FACTOR)
+    padded_im = pad_zeros(im, dest_size)
+    return blur_spatial_kernel(padded_im, kernel * EXPAND_FACTOR).astype(np.float32)
 
 
 def build_laplacian_pyramid(im, max_levels, filter_size):
@@ -190,7 +188,7 @@ def build_laplacian_pyramid(im, max_levels, filter_size):
     guassian_pyr = build_gaussian_pyramid(im, max_levels, filter_size)[0]
     pyr = []
     for i in range(max_levels-1):
-        pyr.append(guassian_pyr[i] - expand(guassian_pyr[i + 1], filter_vec))
+        pyr.append(guassian_pyr[i] - expand(guassian_pyr[i + 1], filter_vec, guassian_pyr[i].shape))
     pyr.append(guassian_pyr[max_levels-1])
     return pyr, filter_vec
 
@@ -207,7 +205,7 @@ def laplacian_to_image(lpyr, filter_vec, coeff):
     end = len(lpyr) - 1
     img = lpyr[end]
     for i in range(end - 1, -1, -1):
-        img = expand(img, filter_vec) + lpyr[i]
+        img = expand(img, filter_vec, lpyr[i].shape) + lpyr[i]
     return img.astype(np.float32)
 
 
@@ -228,32 +226,6 @@ def canvas_size(levels, width):
         return sum_width
     return sum_width + 1
 
-
-def render_pyramid(pyr, levels):
-    """
-    Outlays images in a given pyramid on a black canvas, with images stretched in [0,1]
-    :param pyr: laplacian or gaussian pyramid
-    :param levels: number of levels in pyramid to present
-    :return: canvas of images
-    """
-    width = int(canvas_size(levels, pyr[0].shape[1]))
-    canvas = np.zeros(int(pyr[0].shape[0] * width)).reshape((int(pyr[0].shape[0])), width)
-    col = 0
-    for i in range(levels):
-        stretched_im = (pyr[i] - np.min(pyr[i])) / (np.max(pyr[i]) - np.min(pyr[i]))
-        canvas[:pyr[i].shape[0], col: col + pyr[i].shape[1]] = stretched_im
-        col += pyr[i].shape[1]
-    return canvas
-
-
-def display_pyramid(pyr, levels):
-    """
-    Displays images from a given pyramid on a black canvas, with images stretched in [0,1]
-    :param pyr: laplacian or gaussian pyramid
-    :param levels: number of levels in pyramid to present
-    """
-    plt.imshow(render_pyramid(pyr, levels), plt.cm.gray)
-    plt.show()
 
 
 def fix_levels(max_levels, im_shape):
@@ -292,7 +264,7 @@ def pyramid_blending(im1, im2, mask, max_levels, filter_size_im, filter_size_mas
     :param filter_size_mask: size of gaussian filter (odd scalar) for filter kernel of mask's pyramid
     :return: im_blend: blended image
     """
-    max_levels = fix_levels(max_levels, im1.shape)
+    # max_levels = fix_levels(max_levels, im1.shape)
     laplac_im1, filter_vec = build_laplacian_pyramid(im1, max_levels, filter_size_im)
     laplac_im2 = build_laplacian_pyramid(im2, max_levels, filter_size_im)[0]
     mask_pyr = build_gaussian_pyramid(mask.astype(np.float32), max_levels, filter_size_mask)[0]
@@ -303,29 +275,6 @@ def pyramid_blending(im1, im2, mask, max_levels, filter_size_im, filter_size_mas
     im_blend = laplacian_to_image(laplacian_out, filter_vec, coeff).astype(np.float32)
     return np.clip(im_blend, 0, 1)
 
-
-
-def blending_examples_helper(im1, im2, mask, max_levels, filter_size_im, filter_size_mask):
-
-    blended_R = pyramid_blending(im1[:,:,0], im2[:,:,0], mask, max_levels, filter_size_im, filter_size_mask)
-    blended_G = pyramid_blending(im1[:,:,1], im2[:,:,1], mask, max_levels, filter_size_im, filter_size_mask)
-    blended_B = pyramid_blending(im1[:,:,2], im2[:,:,2], mask, max_levels, filter_size_im, filter_size_mask)
-    blended = np.zeros(im1.size).reshape(im1.shape)
-    blended[:,:,0] = blended_R
-    blended[:,:,1] = blended_G
-    blended[:,:,2] = blended_B
-
-    fig = plt.figure()
-    fig.add_subplot(221)
-    plt.imshow(im1)
-    fig.add_subplot(222)
-    plt.imshow(im2)
-    fig.add_subplot(223)
-    plt.imshow(mask, plt.cm.gray)
-    fig.add_subplot(224)
-    plt.imshow(blended)
-    plt.show()
-    return blended.astype(np.float32)
 
 
 def relpath(filename):
